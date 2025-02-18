@@ -1,11 +1,14 @@
 import { useRef, useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
+import axios from 'axios';
 
 export default function InterviewMonitor() {
   const videoRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
-  
+  const [videoFile, setVideoFile] = useState(null);
+
   useEffect(() => {
     async function getVideo() {
       try {
@@ -22,13 +25,36 @@ export default function InterviewMonitor() {
   }, []);
 
   const startRecording = () => {
+    if (!stream) return;
     setIsRecording(true);
-    // TODO: Implement AI processing via backend
+    const mediaRecorder = new MediaRecorder(stream);
+    const chunks = [];
+    mediaRecorder.ondataavailable = (event) => chunks.push(event.data);
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: 'video/mp4' });
+      setVideoFile(blob);
+    };
+    mediaRecorder.start();
+    mediaRecorderRef.current = mediaRecorder;
   };
 
   const stopRecording = () => {
     setIsRecording(false);
-    // TODO: Stop AI processing and analyze results
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  const uploadVideo = async () => {
+    if (!videoFile) return;
+    const formData = new FormData();
+    formData.append('file', videoFile, 'interview.mp4');
+    try {
+      const response = await axios.post('/api/stop-recording', formData);
+      console.log('Analysis result:', response.data);
+    } catch (err) {
+      console.error("Upload failed: ", err);
+    }
   };
 
   return (
@@ -42,56 +68,7 @@ export default function InterviewMonitor() {
           <Button onClick={startRecording} className="bg-green-500 hover:bg-green-700">Start Interview</Button>
         )}
       </div>
+      {videoFile && <Button onClick={uploadVideo} className="mt-4 bg-blue-500 hover:bg-blue-700">Upload & Analyze</Button>}
     </div>
   );
 }
-from fastapi import FastAPI, UploadFile, File
-import cv2
-import numpy as np
-import asyncio
-import tempfile
-from pydub import AudioSegment
-import mediapipe as mp
-import deepspeech
-
-app = FastAPI()
-
-mp_face_mesh = mp.solutions.face_mesh.FaceMesh()
-deepspeech_model = deepspeech.Model('deepspeech_model.pbmm')
-
-@app.post("/api/start-recording")
-def start_recording():
-    return {"message": "Recording started"}
-
-@app.post("/api/stop-recording")
-async def stop_recording(file: UploadFile = File(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
-        temp_video.write(await file.read())
-        video_path = temp_video.name
-    
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append(frame)
-    cap.release()
-    
-    def analyze_video(frames):
-        face_movements = []
-        for frame in frames:
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = mp_face_mesh.process(rgb_frame)
-            if results.multi_face_landmarks:
-                face_movements.append(results.multi_face_landmarks)
-        return face_movements
-    
-    video_analysis = analyze_video(frames)
-    
-    audio = AudioSegment.from_file(video_path)
-    audio_data = np.frombuffer(audio.raw_data, dtype=np.int16)
-    audio_text = deepspeech_model.stt(audio_data)
-    
-    return {"video_analysis": video_analysis, "audio_transcription": audio_text}
-
